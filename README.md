@@ -1,5 +1,5 @@
 # go-episode-remapper
-A go module to help remap TMDB to TVDB/IMDb episode order
+A go module to help remap between TVDB, TMDB, and IMDb episode order
 
 ## CLI
 - Automatically loads `./.env` if present (without overriding already-exported env vars).
