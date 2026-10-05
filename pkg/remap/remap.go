@@ -498,7 +498,7 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 	// 1. TMDB's own external_ids mapping.
 	if tvdbID, err := m.tmdb.GetTvdbIDFromTmdbID(ctx, tmdbSeriesID); err == nil && tvdbID != 0 {
 		if series, err := m.tvdb.GetSeriesExtended(ctx, tvdbID); err == nil && series != nil &&
-			namesCorroborate(tmdbName, series.Name) {
+			corroboratesSeriesName(tmdbName, series.Name, series.Aliases) {
 			return &tvdb.SeriesBaseRecord{ID: series.ID, Name: series.Name}, "tmdb_external_ids", nil
 		}
 	}
@@ -518,6 +518,13 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 		if namesCorroborate(tmdbName, series.Name) {
 			return series, "tvdb_search:" + form, nil
 		}
+		// The search record carries no aliases, so a title that differs may still be
+		// this show filed under another name. One extra fetch, on a path already
+		// reached only after the reliable route failed.
+		if ext, err := m.tvdb.GetSeriesExtended(ctx, series.ID); err == nil && ext != nil &&
+			corroboratesSeriesName(tmdbName, ext.Name, ext.Aliases) {
+			return series, "tvdb_search:" + form + ":alias", nil
+		}
 	}
 
 	return nil, "unverified", fmt.Errorf("no verified tvdb series for tmdb %d: no candidate whose title matches %q (an id match alone is not a mapping)", tmdbSeriesID, tmdbName)
@@ -530,6 +537,33 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 func namesCorroborate(a, b string) bool {
 	na, nb := normalizeName(a), normalizeName(b)
 	return na != "" && na == nb
+}
+
+// corroboratesSeriesName reports whether a TMDB series name is one of the names TVDB
+// files this series under -- the canonical name OR any alias.
+//
+// WHY THIS EXISTS. namesCorroborate compares the canonical name only, and that
+// rejects CORRECT links for every show TVDB catalogues under its original-language
+// title while TMDB carries the English one. Measured against the live databases:
+// Attack on Titan, My Hero Academia, Bluey, Archer, Horimiya, Detective Conan,
+// Cardcaptor Sakura and Kuroko's Basketball all resolved through TMDB's own
+// external_ids and were then rejected on wording alone, so 11 of 60 sampled episodes
+// 404'd on the tmdb_id path while the same episode served correctly by tvdb_id.
+//
+// The gate remains a gate: a name matching neither the canonical title nor any alias
+// is still refused, because the risk it guards is real -- TVDB's bare-number
+// remote-id search collides with unrelated shows (measured 2026-09-25: TMDB 1433
+// "American Dad!" resolves to TVDB 84070, "War and Remembrance", a 1988 miniseries).
+func corroboratesSeriesName(want, canonical string, aliases []tvdb.Alias) bool {
+	if namesCorroborate(want, canonical) {
+		return true
+	}
+	for _, a := range aliases {
+		if namesCorroborate(want, a.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 type TvdbToTmdbResult struct {

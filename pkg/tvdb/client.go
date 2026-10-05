@@ -176,9 +176,21 @@ type SeriesBaseRecord struct {
 	Name string `json:"name"`
 }
 
+// Alias is one alternative title TVDB files a series under.
+//
+// TVDB catalogues many shows under their ORIGINAL-LANGUAGE title and lists the name
+// the rest of the world uses here, so a corroboration check that reads only `Name`
+// rejects correct links -- which is exactly what happened (see
+// corroboratesSeriesName in pkg/remap).
+type Alias struct {
+	Language string `json:"language"`
+	Name     string `json:"name"`
+}
+
 type SeriesExtendedRecord struct {
 	ID        int        `json:"id"`
 	Name      string     `json:"name"`
+	Aliases   []Alias    `json:"aliases"`
 	RemoteIDs []RemoteID `json:"remoteIds"`
 }
 
