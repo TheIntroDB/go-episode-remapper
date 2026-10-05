@@ -495,11 +495,39 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 		return nil, "", fmt.Errorf("cannot verify a tvdb series for tmdb id %d: no tmdb series name to check against", tmdbSeriesID)
 	}
 
-	// 1. TMDB's own external_ids mapping.
+	// 1. TMDB's own external_ids mapping. NOT name-gated -- see below.
 	if tvdbID, err := m.tmdb.GetTvdbIDFromTmdbID(ctx, tmdbSeriesID); err == nil && tvdbID != 0 {
-		if series, err := m.tvdb.GetSeriesExtended(ctx, tvdbID); err == nil && series != nil &&
-			corroboratesSeriesName(tmdbName, series.Name, series.Aliases) {
-			return &tvdb.SeriesBaseRecord{ID: series.ID, Name: series.Name}, "tmdb_external_ids", nil
+		if series, err := m.tvdb.GetSeriesExtended(ctx, tvdbID); err == nil && series != nil {
+			// WHY THIS ROUTE IS NOT NAME-GATED, AND THE OTHERS STILL ARE.
+			//
+			// This id is a CLAIM ABOUT TMDB'S OWN RECORD, not a guess at a match: it
+			// is the TVDB id TMDB itself publishes for this very series, so the two
+			// records already assert they are the same show. Requiring the names to
+			// also agree rejects correct links whenever TVDB files a show under a
+			// title TMDB never uses, and it cannot be repaired by widening the
+			// comparison: measured against the live databases, Blue Exorcist's TVDB
+			// record lists 17 aliases -- romaji, translations, Cyrillic -- and NOT
+			// "Blue Exorcist"; "Vanished Name" (TMDB) vs "隐身的名字" (TVDB) has no
+			// aliases at all; "The Sea Beyond" vs "Mare Fuori" likewise. No string
+			// comparison reaches any of those, yet the id is correct in every case
+			// (verified: all five of the sampled failures carried a series-level
+			// tvdb_id matching the one we held).
+			//
+			// The routes below DO keep the gate, because that is where the risk
+			// actually lives: TVDB's prefixed remote-id searches match on a bare
+			// number and collide with unrelated series (measured 2026-09-25: TMDB
+			// 1433 "American Dad!" resolving to TVDB 84070 "War and Remembrance", a
+			// 1988 miniseries). A search result is a candidate; TMDB's own field is
+			// not.
+			//
+			// The risk kept here is a stale or wrong field in TMDB. It is not
+			// silent: the provenance records the disagreement so a caller can log,
+			// count or gate on it rather than having it enforced as a rejection.
+			provenance := "tmdb_external_ids"
+			if !corroboratesSeriesName(tmdbName, series.Name, series.Aliases) {
+				provenance = "tmdb_external_ids_name_mismatch"
+			}
+			return &tvdb.SeriesBaseRecord{ID: series.ID, Name: series.Name}, provenance, nil
 		}
 	}
 
