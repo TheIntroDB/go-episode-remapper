@@ -555,11 +555,13 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 		if namesCorroborate(tmdbName, series.Name) {
 			return series, "tvdb_search:" + form, nil
 		}
-		// The search record carries no aliases, so a title that differs may still be
-		// this show filed under another name. One extra fetch, on a path already
-		// reached only after the reliable route failed.
-		if ext, err := m.tvdb.GetSeriesExtended(ctx, series.ID); err == nil && ext != nil &&
-			corroboratesSeriesName(tmdbName, ext.Name, ext.Aliases) {
+		// The search record DOES carry aliases (see SeriesBaseRecord), so a title that
+		// differs may still be this show under another name -- and that can be decided
+		// from the record already in hand. This used to make a second
+		// GetSeriesExtended call purely to read aliases, which was both unnecessary
+		// and a failure mode: if that call errored, a correct alias-matching link was
+		// rejected.
+		if corroboratesSeriesName(tmdbName, series.Name, series.Aliases) {
 			return series, "tvdb_search:" + form + ":alias", nil
 		}
 	}

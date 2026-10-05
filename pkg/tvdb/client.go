@@ -174,6 +174,12 @@ type RemoteID struct {
 type SeriesBaseRecord struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
+	// Aliases is populated on SEARCH results too, which an earlier comment here
+	// claimed it was not. Measured live: /search/remoteid/1429 returns series 267440
+	// (進撃の巨人) with 22 aliases, Breaking Bad with 6, Demon Slayer with 15. Dropping
+	// them forced a second GetSeriesExtended call purely to see aliases, and if that
+	// call failed a correct alias-matching link was rejected.
+	Aliases []Alias `json:"aliases"`
 }
 
 // Alias is one alternative title TVDB files a series under.
@@ -201,6 +207,19 @@ type EpisodeBaseRecord struct {
 	SeriesID     int    `json:"seriesId"`
 	SeasonNumber int    `json:"seasonNumber"`
 	Number       int    `json:"number"`
+	// AbsoluteNumber is the episode's absolute-order number -- the only cross-order
+	// key that exists for anime. The mapper supports an `absolute` order, so without
+	// this an absolute-numbered input can only be placed by coordinates, which is
+	// exactly where wrong mappings happen. TVDB returns it live even though its
+	// published schema omits it from some episode schemas.
+	AbsoluteNumber int `json:"absoluteNumber"`
+	// The explicit specials-placement fields. These are TVDB's authoritative statement
+	// of where a special sits relative to the regular run (measured: Futurama special
+	// 342888 has airsAfterSeason=5). Unparsed, the mapper has to guess from name and
+	// air date for precisely the specials it already documents as mis-mapping.
+	AirsBeforeSeason  int `json:"airsBeforeSeason"`
+	AirsBeforeEpisode int `json:"airsBeforeEpisode"`
+	AirsAfterSeason   int `json:"airsAfterSeason"`
 }
 
 // Translation is one per-language name for an episode.
@@ -388,7 +407,8 @@ func (c *Client) GetEpisodeExtended(ctx context.Context, episodeID int64) (*Epis
 		Data   EpisodeExtendedRecord `json:"data"`
 		Status string                `json:"status"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/episodes/"+strconv.FormatInt(episodeID, 10)+"/extended", nil, nil, &resp); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/episodes/"+strconv.FormatInt(episodeID, 10)+"/extended",
+		url.Values{"meta": []string{"translations"}}, nil, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Data.ID == 0 {
