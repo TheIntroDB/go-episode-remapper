@@ -292,6 +292,14 @@ func (m *Mapper) TmdbToTvdbInOrder(ctx context.Context, tmdbSeriesID int, season
 					}, nil
 				}
 			}
+			// Still tied after names and translations. If the two seasons can be
+			// SHOWN to number alike, the caller's own coordinate is evidence rather
+			// than an assumption -- measured: TMDB 110283 s2e6 ties with s2e5 on air
+			// date and TVDB carries no matching translation, but the seasons align
+			// and s2e6 is at the caller's coordinate.
+			if res := m.verifiedCoordinateMatch(ctx, tvdbSeries.ID, tmdbSeriesID, normalizedOrder, season, episode, lookupUsed); res != nil {
+				return res, nil
+			}
 			return nil, fmt.Errorf(
 				"ambiguous tmdb %d s%de%d: %d episodes of tvdb series %d in the %q order aired %s (%s) and none matched the name %q",
 				tmdbSeriesID, season, episode, len(candidates), tvdbSeries.ID, normalizedOrder,
@@ -325,6 +333,17 @@ func (m *Mapper) TmdbToTvdbInOrder(ctx context.Context, tmdbSeriesID int, season
 				}, nil
 			}
 		}
+	}
+
+	// Evidence-based coordinate identity, attempted BEFORE the opt-in assumption
+	// below. This one checks that the two seasons really do number the same episodes
+	// the same way, so it needs no opt-in: measured, TMDB 54487 (Dork Hunters) has
+	// air_date NULL for every episode but the first -- so no air-date candidate can
+	// ever be found -- while the seasons are a clean 36-for-36 with identical
+	// numbering. Without this the only route to that episode was the blanket
+	// assumption, which is wrong exactly where this mapper is needed.
+	if res := m.verifiedCoordinateMatch(ctx, tvdbSeries.ID, tmdbSeriesID, normalizedOrder, season, episode, lookupUsed); res != nil {
+		return res, nil
 	}
 
 	// Coordinate identity is an assumption, not a match: it asserts that both
