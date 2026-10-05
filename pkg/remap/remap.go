@@ -491,9 +491,6 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 	if details, err := m.tmdb.GetTVDetails(ctx, tmdbSeriesID); err == nil && details != nil {
 		tmdbName = details.Name
 	}
-	if strings.TrimSpace(tmdbName) == "" {
-		return nil, "", fmt.Errorf("cannot verify a tvdb series for tmdb id %d: no tmdb series name to check against", tmdbSeriesID)
-	}
 
 	// 1. TMDB's own external_ids mapping. NOT name-gated -- see below.
 	if tvdbID, err := m.tmdb.GetTvdbIDFromTmdbID(ctx, tmdbSeriesID); err == nil && tvdbID != 0 {
@@ -529,6 +526,18 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 			}
 			return &tvdb.SeriesBaseRecord{ID: series.ID, Name: series.Name}, provenance, nil
 		}
+	}
+
+	// Routes 2+ compare NAMES, so they need one; route 1 above does not.
+	//
+	// This guard used to sit before route 1 as well, which rejected a media that had a
+	// perfectly good external_ids link but no name from TMDB. Once route 1 stopped
+	// consulting the name -- it only records a disagreement in the provenance -- that
+	// requirement became a rejection with nothing left to justify it. A transient
+	// GetTVDetails failure had the same effect: it silently disabled the most reliable
+	// route.
+	if strings.TrimSpace(tmdbName) == "" {
+		return nil, "", fmt.Errorf("cannot verify a tvdb series for tmdb id %d: no tmdb series name to check against", tmdbSeriesID)
 	}
 
 	// 2. TVDB's prefixed searches only. The bare-number form is the one that

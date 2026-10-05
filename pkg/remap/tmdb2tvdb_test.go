@@ -50,6 +50,10 @@ type fakeTVDB struct {
 	// seriesByID backs GetSeriesExtended, used to read a series name when
 	// corroborating a link.
 	seriesByID map[int]*tvdb.SeriesBaseRecord
+	// aliasesByID backs the aliases on GetSeriesExtended. TVDB files many shows
+	// under their original-language title and lists the English one here, so a
+	// corroboration that reads only the canonical name rejects correct links.
+	aliasesByID map[int][]tvdb.Alias
 	// seriesRemoteIDs backs the series-level remote ids on GetSeriesExtended,
 	// which is how the tvdb2tmdb direction learns the TMDB series id.
 	seriesRemoteIDs map[int][]tvdb.RemoteID
@@ -97,6 +101,7 @@ func (f *fakeTVDB) GetSeriesExtended(_ context.Context, seriesID int) (*tvdb.Ser
 		return &tvdb.SeriesExtendedRecord{
 			ID:        s.ID,
 			Name:      s.Name,
+			Aliases:   f.aliasesByID[seriesID],
 			RemoteIDs: f.seriesRemoteIDs[seriesID],
 		}, nil
 	}
