@@ -203,14 +203,27 @@ type EpisodeBaseRecord struct {
 	Number       int    `json:"number"`
 }
 
+// Translation is one per-language name for an episode.
+//
+// TVDB ships these and TMDB carries whichever language it happens to have, so a
+// comparison that reads only the canonical name misses correct matches in both
+// directions. Measured: TVDB series 388150 s2e6 is "La mamma è sempre la mamma"
+// (Italian) while TMDB calls it "Episode 6 - Mum is always mum"; TVDB's English
+// translation is exactly "Mum is always mum".
+type Translation struct {
+	Language string `json:"language"`
+	Name     string `json:"name"`
+}
+
 type EpisodeExtendedRecord struct {
-	ID           int64      `json:"id"`
-	Name         string     `json:"name"`
-	Aired        string     `json:"aired"`
-	SeriesID     int        `json:"seriesId"`
-	SeasonNumber int        `json:"seasonNumber"`
-	Number       int        `json:"number"`
-	RemoteIDs    []RemoteID `json:"remoteIds"`
+	ID           int64         `json:"id"`
+	Name         string        `json:"name"`
+	Aired        string        `json:"aired"`
+	SeriesID     int           `json:"seriesId"`
+	SeasonNumber int           `json:"seasonNumber"`
+	Number       int           `json:"number"`
+	Translations []Translation `json:"translations"`
+	RemoteIDs    []RemoteID    `json:"remoteIds"`
 }
 
 type SearchByRemoteIdResult struct {

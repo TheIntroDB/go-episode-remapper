@@ -1069,14 +1069,36 @@ func TitlesMatch(want, got string) bool {
 		return true
 	}
 
-	// Retry with a "Prefix:" segment removed, but only when the colon is
+	// 1) Titles that are ONLY an episode number, in different scripts or numeral
+	// systems: TMDB "Episode 31" vs TVDB 第三十一集. Both encode 31, and equal numbers
+	// are evidence rather than a guess. Measured: TVDB series 475408 has five episodes
+	// all aired 2026-03-30 named 第二十七集..第三十一集, so the ambiguity refusal could
+	// not resolve s1e31 even though 第三十一集 is literally "episode 31" sitting at
+	// s1e31. A real title ("Pilot") returns false here and falls through.
+	if wn, wok := episodeOrdinalFromTitle(want); wok {
+		if gn, gok := episodeOrdinalFromTitle(got); gok && wn == gn {
+			return true
+		}
+	}
+
+	// 2) Retry with a leading "Episode N - " marker removed. TMDB routinely prefixes
+	// the number, TVDB does not: TMDB "Episode 6 - Mum is always mum" vs TVDB
+	// "Mum is always mum". Only counts when something was actually removed, so an
+	// ordinary comparison is unaffected.
+	wantStripped, gotStripped := stripEpisodePrefix(want), stripEpisodePrefix(got)
+	if (wantStripped != want || gotStripped != got) &&
+		normalizeName(wantStripped) == normalizeName(gotStripped) {
+		return true
+	}
+
+	// 3) Retry with a "Prefix:" segment removed, but only when the colon is
 	// actually there -- an exact comparison stays the rule for ordinary titles,
 	// so this cannot turn "The End" into a match for "The Beginning of the End".
-	wantStripped, gotStripped := stripTitlePrefix(want), stripTitlePrefix(got)
-	if wantStripped == want && gotStripped == got {
+	wantP, gotP := stripTitlePrefix(wantStripped), stripTitlePrefix(gotStripped)
+	if wantP == wantStripped && gotP == gotStripped {
 		return false
 	}
-	return normalizeName(wantStripped) == normalizeName(gotStripped)
+	return normalizeName(wantP) == normalizeName(gotP)
 }
 
 // stripTitlePrefix removes a leading "Something: " segment from a title.
