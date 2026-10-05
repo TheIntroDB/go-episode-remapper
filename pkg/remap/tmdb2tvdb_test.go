@@ -57,6 +57,11 @@ type fakeTVDB struct {
 	// seriesRemoteIDs backs the series-level remote ids on GetSeriesExtended,
 	// which is how the tvdb2tmdb direction learns the TMDB series id.
 	seriesRemoteIDs map[int][]tvdb.RemoteID
+	// episodeTranslations backs the per-language names on GetEpisodeExtended. TVDB
+	// returns them only when the request carries ?meta=translations, so a test that
+	// forgets this sees exactly what production saw before the parameter was added:
+	// nothing.
+	episodeTranslations map[int64][]tvdb.Translation
 	// episodeRemoteIDs backs the remote ids on GetEpisodeExtended, which is how
 	// that direction learns the TMDB episode id. TVDB's values here go stale --
 	// the Futurama specials point at TMDB ids that no longer exist -- so the
@@ -117,6 +122,7 @@ func (f *fakeTVDB) GetEpisodeExtended(_ context.Context, id int64) (*tvdb.Episod
 			SeriesID:     ep.SeriesID,
 			SeasonNumber: ep.SeasonNumber,
 			Number:       ep.Number,
+			Translations: f.episodeTranslations[id],
 			RemoteIDs:    f.episodeRemoteIDs[id],
 		}, nil
 	}

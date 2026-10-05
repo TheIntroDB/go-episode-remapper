@@ -272,6 +272,25 @@ func (m *Mapper) TmdbToTvdbInOrder(ctx context.Context, tmdbSeriesID int, season
 						TVDBSeriesLookup:  lookupUsed,
 					}, nil
 				}
+				// The canonical names did not separate the candidates, which happens
+				// whenever TVDB's primary language differs from TMDB's. TVDB ships
+				// per-language names, so retry against those before declaring the tie
+				// unbreakable. Bounded: one extra request per candidate, and the
+				// candidate set is the handful sharing one air date.
+				if best := m.pickBestByTranslation(ctx, candidates, tmdbEp.Name); best != nil {
+					return &TmdbToTvdbResult{
+						InputTMDBSeriesID: tmdbSeriesID,
+						InputSeason:       season,
+						InputEpisode:      episode,
+						TVDBSeriesID:      tvdbSeries.ID,
+						TVDBEpisodeID:     best.ID,
+						TVDBSeason:        best.SeasonNumber,
+						TVDBEpisode:       best.Number,
+						TVDBEpisodeName:   best.Name,
+						MatchedBy:         "air_date+translation",
+						TVDBSeriesLookup:  lookupUsed,
+					}, nil
+				}
 			}
 			return nil, fmt.Errorf(
 				"ambiguous tmdb %d s%de%d: %d episodes of tvdb series %d in the %q order aired %s (%s) and none matched the name %q",
