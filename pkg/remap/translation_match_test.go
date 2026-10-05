@@ -2,10 +2,40 @@ package remap
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/Pasithea0/go-tmdb-episodes-fix/pkg/tvdb"
 )
+
+// The translations payload is an OBJECT of per-kind arrays, not a flat array. Modelling
+// it as a slice fails the entire JSON decode, so GetEpisodeExtended returns an error and
+// every caller silently loses the record -- which is how the first version of this fix
+// shipped inert AND broke the episode remote ids the tvdb2tmdb direction relies on.
+// This pins the shape against the payload TVDB actually returns.
+func TestEpisodeExtendedParsesTheRealTranslationsShape(t *testing.T) {
+	body := `{"id":10979690,"name":"La mamma e sempre la mamma",` +
+		`"translations":{"nameTranslations":[{"name":"Mum is always mum","language":"eng"},` +
+		`{"name":"Mamma ist immer Mama","language":"deu"}],` +
+		`"overviewTranslations":[{"overview":"x","language":"eng"}],"aliases":[]},` +
+		`"remoteIds":[{"sourceName":"TheMovieDB.com","id":"12345"}]}`
+
+	var rec tvdb.EpisodeExtendedRecord
+	if err := json.Unmarshal([]byte(body), &rec); err != nil {
+		t.Fatalf("the real TVDB shape must decode, got: %v", err)
+	}
+	if len(rec.Translations.NameTranslations) != 2 {
+		t.Fatalf("nameTranslations did not parse: %+v", rec.Translations)
+	}
+	if rec.Translations.NameTranslations[0].Name != "Mum is always mum" {
+		t.Fatalf("first translation = %q", rec.Translations.NameTranslations[0].Name)
+	}
+	// The remote ids must survive too: a decode failure here silently disables the
+	// tvdb2tmdb direction.
+	if len(rec.RemoteIDs) != 1 {
+		t.Fatalf("remoteIds did not parse alongside translations: %+v", rec.RemoteIDs)
+	}
+}
 
 // translationMapper builds a Mapper whose episodes carry per-language names, the way
 // TVDB returns them when the request asks for translations.

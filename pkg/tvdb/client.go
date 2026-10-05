@@ -234,15 +234,30 @@ type Translation struct {
 	Name     string `json:"name"`
 }
 
+// TranslationExtended is TVDB's translations payload for an episode.
+//
+// IT IS AN OBJECT OF PER-KIND ARRAYS, NOT A FLAT ARRAY OF TRANSLATIONS. Measured live
+// against /episodes/{id}/extended?meta=translations:
+//
+//	"translations": {"nameTranslations": [{"name":"...","language":"ita"}],
+//	                 "overviewTranslations": [...], "aliases": [...]}
+//
+// Modelling this as a slice fails the whole JSON decode, so GetEpisodeExtended returns
+// an error and every caller silently loses the record -- including the episode remote
+// ids the tvdb2tmdb direction depends on. Only the names matter here.
+type TranslationExtended struct {
+	NameTranslations []Translation `json:"nameTranslations"`
+}
+
 type EpisodeExtendedRecord struct {
-	ID           int64         `json:"id"`
-	Name         string        `json:"name"`
-	Aired        string        `json:"aired"`
-	SeriesID     int           `json:"seriesId"`
-	SeasonNumber int           `json:"seasonNumber"`
-	Number       int           `json:"number"`
-	Translations []Translation `json:"translations"`
-	RemoteIDs    []RemoteID    `json:"remoteIds"`
+	ID           int64               `json:"id"`
+	Name         string              `json:"name"`
+	Aired        string              `json:"aired"`
+	SeriesID     int                 `json:"seriesId"`
+	SeasonNumber int                 `json:"seasonNumber"`
+	Number       int                 `json:"number"`
+	Translations TranslationExtended `json:"translations"`
+	RemoteIDs    []RemoteID          `json:"remoteIds"`
 }
 
 type SearchByRemoteIdResult struct {

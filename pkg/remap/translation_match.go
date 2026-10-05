@@ -44,7 +44,7 @@ func (m *Mapper) pickBestByTranslation(ctx context.Context, candidates []tvdb.Ep
 			if strings.TrimSpace(ext.Name) != "" {
 				names = append(names, ext.Name)
 			}
-			for _, t := range ext.Translations {
+			for _, t := range ext.Translations.NameTranslations {
 				if strings.TrimSpace(t.Name) != "" {
 					names = append(names, t.Name)
 				}

@@ -122,7 +122,7 @@ func (f *fakeTVDB) GetEpisodeExtended(_ context.Context, id int64) (*tvdb.Episod
 			SeriesID:     ep.SeriesID,
 			SeasonNumber: ep.SeasonNumber,
 			Number:       ep.Number,
-			Translations: f.episodeTranslations[id],
+			Translations: tvdb.TranslationExtended{NameTranslations: f.episodeTranslations[id]},
 			RemoteIDs:    f.episodeRemoteIDs[id],
 		}, nil
 	}
