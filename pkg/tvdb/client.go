@@ -200,6 +200,15 @@ type SeriesExtendedRecord struct {
 	RemoteIDs []RemoteID `json:"remoteIds"`
 }
 
+// SeriesTranslationRecord is one language's names for a series, from
+// /series/{id}/translations/{language}.
+type SeriesTranslationRecord struct {
+	Name     string  `json:"name"`
+	Overview string  `json:"overview"`
+	Language string  `json:"language"`
+	Aliases  []Alias `json:"aliases"`
+}
+
 type EpisodeBaseRecord struct {
 	ID           int64  `json:"id"`
 	Name         string `json:"name"`
@@ -387,6 +396,33 @@ func (c *Client) GetSeriesExtended(ctx context.Context, seriesID int) (*SeriesEx
 	}
 	if resp.Data.ID == 0 {
 		return nil, errors.New("tvdb series extended returned empty data")
+	}
+	return &resp.Data, nil
+}
+
+// GetSeriesTranslation returns a series' names in one language.
+//
+// TVDB files many shows under their original-language title and does NOT always
+// carry the English title as an alias (measured: TVDB 72454 is 名探偵コナン with no
+// alias "Detective Conan", yet its English translation is exactly that). So this
+// is the only route to a language-aware name check; Accept-Language does NOT
+// translate the series name and /series/{id}/extended's nameTranslations is only a
+// list of language codes.
+func (c *Client) GetSeriesTranslation(ctx context.Context, seriesID int, language string) (*SeriesTranslationRecord, error) {
+	language = strings.TrimSpace(language)
+	if language == "" {
+		return nil, errors.New("language is required")
+	}
+	path := fmt.Sprintf("/series/%d/translations/%s", seriesID, url.PathEscape(language))
+	var resp struct {
+		Data   SeriesTranslationRecord `json:"data"`
+		Status string                  `json:"status"`
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, nil, &resp); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(resp.Data.Name) == "" {
+		return nil, errors.New("tvdb series translation returned empty name")
 	}
 	return &resp.Data, nil
 }

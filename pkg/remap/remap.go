@@ -39,6 +39,7 @@ type tvdbAPI interface {
 	FindSeriesByIMDbID(ctx context.Context, imdbID string) (*tvdb.SeriesBaseRecord, string, error)
 	FindSeriesByTMDBID(ctx context.Context, tmdbID int) (*tvdb.SeriesBaseRecord, string, error)
 	GetSeriesExtended(ctx context.Context, seriesID int) (*tvdb.SeriesExtendedRecord, error)
+	GetSeriesTranslation(ctx context.Context, seriesID int, language string) (*tvdb.SeriesTranslationRecord, error)
 	GetSeriesEpisodes(ctx context.Context, seriesID int, seasonType string, page int, season *int, episodeNumber *int, airDate *string) ([]tvdb.EpisodeBaseRecord, error)
 	GetEpisodeExtended(ctx context.Context, episodeID int64) (*tvdb.EpisodeExtendedRecord, error)
 }
@@ -530,39 +531,26 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 		tmdbName = details.Name
 	}
 
-	// 1. TMDB's own external_ids mapping. NOT name-gated -- see below.
+	// 1. TMDB's own external_ids mapping. CORROBORATED before it is trusted.
+	//
+	// TMDB's field is user-contributed and can be stale or wrong, and the caller
+	// stores TVDB ids, so an unverified link relabels a whole series' submissions.
+	// SeriesCorroboratesTmdb accepts the link only on a real signal: TVDB's own
+	// record echoing this TMDB id (language-free), or the name matching in some
+	// language (canonical, aliases, or a per-language translation). An
+	// uncorroborated link is NOT accepted here -- the search routes below get their
+	// chance, and if they fail too the link is refused.
+	//
+	// The echo and the language-aware name check are what make this tractable: a
+	// pure canonical-name gate rejected correct links (Blue Exorcist's 17 aliases do
+	// not include "Blue Exorcist"; "Vanished Name" vs "隐身的名字" has no aliases at
+	// all), while the measured failures all carried a series-level tvdb_id whose
+	// record echoes the TMDB id.
 	if tvdbID, err := m.tmdb.GetTvdbIDFromTmdbID(ctx, tmdbSeriesID); err == nil && tvdbID != 0 {
 		if series, err := m.tvdb.GetSeriesExtended(ctx, tvdbID); err == nil && series != nil {
-			// WHY THIS ROUTE IS NOT NAME-GATED, AND THE OTHERS STILL ARE.
-			//
-			// This id is a CLAIM ABOUT TMDB'S OWN RECORD, not a guess at a match: it
-			// is the TVDB id TMDB itself publishes for this very series, so the two
-			// records already assert they are the same show. Requiring the names to
-			// also agree rejects correct links whenever TVDB files a show under a
-			// title TMDB never uses, and it cannot be repaired by widening the
-			// comparison: measured against the live databases, Blue Exorcist's TVDB
-			// record lists 17 aliases -- romaji, translations, Cyrillic -- and NOT
-			// "Blue Exorcist"; "Vanished Name" (TMDB) vs "隐身的名字" (TVDB) has no
-			// aliases at all; "The Sea Beyond" vs "Mare Fuori" likewise. No string
-			// comparison reaches any of those, yet the id is correct in every case
-			// (verified: all five of the sampled failures carried a series-level
-			// tvdb_id matching the one we held).
-			//
-			// The routes below DO keep the gate, because that is where the risk
-			// actually lives: TVDB's prefixed remote-id searches match on a bare
-			// number and collide with unrelated series (measured 2026-09-25: TMDB
-			// 1433 "American Dad!" resolving to TVDB 84070 "War and Remembrance", a
-			// 1988 miniseries). A search result is a candidate; TMDB's own field is
-			// not.
-			//
-			// The risk kept here is a stale or wrong field in TMDB. It is not
-			// silent: the provenance records the disagreement so a caller can log,
-			// count or gate on it rather than having it enforced as a rejection.
-			provenance := "tmdb_external_ids"
-			if !corroboratesSeriesName(tmdbName, series.Name, series.Aliases) {
-				provenance = "tmdb_external_ids_name_mismatch"
+			if signal, ok := SeriesCorroboratesTmdb(ctx, m.tvdb, series, tmdbSeriesID, tmdbName); ok {
+				return &tvdb.SeriesBaseRecord{ID: series.ID, Name: series.Name}, "tmdb_external_ids:" + signal, nil
 			}
-			return &tvdb.SeriesBaseRecord{ID: series.ID, Name: series.Name}, provenance, nil
 		}
 	}
 

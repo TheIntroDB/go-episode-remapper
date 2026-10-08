@@ -8,17 +8,36 @@ import (
 	"github.com/Pasithea0/go-tmdb-episodes-fix/pkg/tvdb"
 )
 
-// seriesMapper builds a Mapper whose only identity evidence is TMDB's own
-// external_ids field, so resolveVerifiedTVDBSeries exercises route 1.
-func seriesMapper(tmdbName string, tmdbID, tvdbID int, canonical string, aliases []tvdb.Alias) *Mapper {
+// seriesLinkFixture is the evidence for one TMDB external_ids link: TMDB's name for
+// the series, and the TVDB record the id points at (canonical name, aliases, the
+// record's own remote ids, and its per-language translations).
+type seriesLinkFixture struct {
+	tmdbName     string
+	tmdbID       int
+	tvdbID       int
+	canonical    string
+	aliases      []tvdb.Alias
+	remoteIDs    []tvdb.RemoteID
+	translations map[string]*tvdb.SeriesTranslationRecord
+}
+
+func linkMapper(f seriesLinkFixture) *Mapper {
+	if f.tmdbID == 0 {
+		f.tmdbID = 900
+	}
+	if f.tvdbID == 0 {
+		f.tvdbID = 73871
+	}
 	return &Mapper{
 		tvdb: &fakeTVDB{
-			seriesByID:  map[int]*tvdb.SeriesBaseRecord{tvdbID: {ID: tvdbID, Name: canonical}},
-			aliasesByID: map[int][]tvdb.Alias{tvdbID: aliases},
+			seriesByID:         map[int]*tvdb.SeriesBaseRecord{f.tvdbID: {ID: f.tvdbID, Name: f.canonical}},
+			aliasesByID:        map[int][]tvdb.Alias{f.tvdbID: f.aliases},
+			seriesRemoteIDs:    map[int][]tvdb.RemoteID{f.tvdbID: f.remoteIDs},
+			seriesTranslations: map[int]map[string]*tvdb.SeriesTranslationRecord{f.tvdbID: f.translations},
 		},
 		tmdb: &fakeTMDB{
-			names:  map[int]string{tmdbID: tmdbName},
-			tvdbID: map[int]int{tmdbID: tvdbID},
+			names:  map[int]string{f.tmdbID: f.tmdbName},
+			tvdbID: map[int]int{f.tmdbID: f.tvdbID},
 		},
 		tvdbSeasonType:      "default",
 		fallbackSeasonTypes: defaultFallbackSeasonTypes,
@@ -27,76 +46,107 @@ func seriesMapper(tmdbName string, tmdbID, tvdbID int, canonical string, aliases
 	}
 }
 
-// Route 1 is TMDB's own external_ids field -- a claim about TMDB's own record -- so a
-// name disagreement must not reject it. Measured live: the series-level tvdb_id was
-// correct in all five sampled failures while the name gate rejected every one.
-func TestResolveVerifiedSeriesTrustsTMDBExternalIDs(t *testing.T) {
+// Route 1 is TMDB's own external_ids field, which is user-contributed and can be
+// wrong, and the caller stores TVDB ids -- so the link is trusted only when the TVDB
+// record CORROBORATES it: by echoing the TMDB id in its own remoteIds (language-free),
+// or by the name matching in some language (canonical, alias, or a per-language
+// translation). A record that corroborates by neither is refused.
+func TestResolveVerifiedSeriesCorroboratesTMDBExternalIDs(t *testing.T) {
 	ctx := context.Background()
 
 	cases := []struct {
-		name         string
-		tmdbName     string
-		canonical    string
-		aliases      []tvdb.Alias
-		wantProv     string
-		wantNoErr    bool
-		wantSeriesID int
+		name      string
+		fixture   seriesLinkFixture
+		wantProv  string
+		wantNoErr bool
 	}{
 		{
-			name:      "exact name match is unchanged",
-			tmdbName:  "Futurama",
-			canonical: "Futurama",
-			wantProv:  "tmdb_external_ids", wantNoErr: true, wantSeriesID: 73871,
+			name: "exact canonical name matches",
+			fixture: seriesLinkFixture{
+				tmdbName: "Futurama", canonical: "Futurama",
+			},
+			wantProv: "tmdb_external_ids:name", wantNoErr: true,
 		},
 		{
-			name:      "name found in aliases resolves, provenance unchanged",
-			tmdbName:  "Attack on Titan",
-			canonical: "進撃の巨人",
-			aliases:   []tvdb.Alias{{Language: "eng", Name: "Attack on Titan"}},
-			wantProv:  "tmdb_external_ids", wantNoErr: true, wantSeriesID: 73871,
+			name: "name found in an alias",
+			fixture: seriesLinkFixture{
+				tmdbName: "Attack on Titan", canonical: "進撃の巨人",
+				aliases: []tvdb.Alias{{Language: "eng", Name: "Attack on Titan"}},
+			},
+			wantProv: "tmdb_external_ids:name", wantNoErr: true,
 		},
 		{
-			// The measured real case, and the reason the alias check was not enough on
-			// its own: TVDB lists 17 aliases -- romaji, translations, Cyrillic -- and
-			// NOT the English name TMDB uses. It still resolves, via external_ids.
-			name:      "Blue Exorcist: aliases exist but none matches, still resolves",
-			tmdbName:  "Blue Exorcist",
-			canonical: "青の祓魔師",
-			aliases:   []tvdb.Alias{{Language: "eng", Name: "Ao no Exorcist"}},
-			wantProv:  "tmdb_external_ids_name_mismatch", wantNoErr: true, wantSeriesID: 73871,
+			// The measured real case: TVDB files 青の祓魔師 with romaji/translation
+			// aliases and NOT "Blue Exorcist", so no name comparison reaches it -- the
+			// record's own remoteIds echo is what settles it.
+			name: "aliases do not match, but the record echoes the TMDB id",
+			fixture: seriesLinkFixture{
+				tmdbName: "Blue Exorcist", canonical: "青の祓魔師",
+				aliases:   []tvdb.Alias{{Language: "eng", Name: "Ao no Exorcist"}},
+				remoteIDs: []tvdb.RemoteID{{SourceName: "TheMovieDB.com", ID: "900"}},
+			},
+			wantProv: "tmdb_external_ids:remote_id_echo", wantNoErr: true,
 		},
 		{
-			// "Vanished Name" (TMDB) vs "隐身的名字" (TVDB), no aliases at all.
-			// No string comparison can reach this, yet the id is correct.
-			name:      "no name overlap still resolves, and says so",
-			tmdbName:  "Vanished Name",
-			canonical: "隐身的名字",
-			wantProv:  "tmdb_external_ids_name_mismatch", wantNoErr: true, wantSeriesID: 73871,
+			// 名探偵コナン: aliases carry no "Detective Conan", the record echoes no
+			// TMDB id, but TVDB's English translation IS the TMDB name.
+			name: "no name overlap and no echo, but the English translation matches",
+			fixture: seriesLinkFixture{
+				tmdbName: "Detective Conan", canonical: "名探偵コナン",
+				aliases: []tvdb.Alias{
+					{Language: "jpn", Name: "Meitantei Conan"},
+					{Language: "cat", Name: "Detectiu Conan"},
+					{Language: "eng", Name: "Case Closed"},
+				},
+				translations: map[string]*tvdb.SeriesTranslationRecord{
+					"eng": {Name: "Detective Conan", Language: "eng"},
+				},
+			},
+			wantProv: "tmdb_external_ids:translation:eng", wantNoErr: true,
 		},
 		{
-			// The guard that used to sit before route 1 rejected this outright. Route 1
-			// does not consult the name, so requiring one there was a rejection with
-			// nothing to justify it -- and a transient GetTVDetails failure had the
-			// same effect, silently disabling the most reliable route.
-			name:      "no TMDB name at all still resolves via external_ids",
-			tmdbName:  "",
-			canonical: "進撃の巨人",
-			wantProv:  "tmdb_external_ids_name_mismatch", wantNoErr: true, wantSeriesID: 73871,
+			// The bucket a wrong or stale external_ids falls into: nothing about the
+			// TVDB record says this is TMDB 900.
+			name: "no echo, no alias, no translation -> refused",
+			fixture: seriesLinkFixture{
+				tmdbName: "Vanished Name", canonical: "隐身的名字",
+			},
+			wantNoErr: false,
+		},
+		{
+			// A transient GetTVDetails failure leaves no name, but the echo alone is
+			// still evidence, so the link survives.
+			name: "no TMDB name, but the record echoes the id",
+			fixture: seriesLinkFixture{
+				tmdbName: "", canonical: "進撃の巨人",
+				remoteIDs: []tvdb.RemoteID{{SourceName: "TheMovieDB.com", ID: "900"}},
+			},
+			wantProv: "tmdb_external_ids:remote_id_echo", wantNoErr: true,
+		},
+		{
+			name: "no TMDB name and no echo -> refused",
+			fixture: seriesLinkFixture{
+				tmdbName: "", canonical: "進撃の巨人",
+			},
+			wantNoErr: false,
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			m := seriesMapper(c.tmdbName, 900, 73871, c.canonical, c.aliases)
+			m := linkMapper(c.fixture)
 			series, prov, err := m.resolveVerifiedTVDBSeries(ctx, 900)
 			if c.wantNoErr && err != nil {
 				t.Fatalf("expected a resolution, got error: %v", err)
 			}
-			if err != nil {
+			if !c.wantNoErr {
+				if err == nil {
+					t.Fatalf("expected a refusal, got series %+v (provenance %q)", series, prov)
+				}
 				return
 			}
-			if series == nil || series.ID != c.wantSeriesID {
-				t.Fatalf("series = %+v, want id %d", series, c.wantSeriesID)
+			if series == nil || series.ID != 73871 {
+				t.Fatalf("series = %+v, want id %d", series, 73871)
 			}
 			if prov != c.wantProv {
 				t.Fatalf("provenance = %q, want %q", prov, c.wantProv)

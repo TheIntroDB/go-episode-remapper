@@ -67,6 +67,10 @@ type fakeTVDB struct {
 	// the Futurama specials point at TMDB ids that no longer exist -- so the
 	// path has to tolerate a dead one.
 	episodeRemoteIDs map[int64][]tvdb.RemoteID
+	// seriesTranslations backs GetSeriesTranslation, keyed seriesID -> language.
+	// TVDB files many shows under their original-language title without an English
+	// alias, so this is the only route to a language-aware name check.
+	seriesTranslations map[int]map[string]*tvdb.SeriesTranslationRecord
 
 	lookupUsed string
 
@@ -111,6 +115,16 @@ func (f *fakeTVDB) GetSeriesExtended(_ context.Context, seriesID int) (*tvdb.Ser
 		}, nil
 	}
 	return nil, fmt.Errorf("no tvdb series %d", seriesID)
+}
+
+// GetSeriesTranslation backs the per-language series name lookup.
+func (f *fakeTVDB) GetSeriesTranslation(_ context.Context, seriesID int, language string) (*tvdb.SeriesTranslationRecord, error) {
+	if byLang, ok := f.seriesTranslations[seriesID]; ok {
+		if tr, ok := byLang[language]; ok {
+			return tr, nil
+		}
+	}
+	return nil, fmt.Errorf("no %s translation for series %d", language, seriesID)
 }
 
 func (f *fakeTVDB) GetEpisodeExtended(_ context.Context, id int64) (*tvdb.EpisodeExtendedRecord, error) {
