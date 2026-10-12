@@ -70,6 +70,56 @@ func seriesRemoteIDMatches(remoteIDs []tvdb.RemoteID, tmdbID int) bool {
 	return false
 }
 
+// seriesImdbEcho asks the mapper's configured SeriesImdbID lookup whether TMDB and the
+// TVDB record name the same IMDb id for this series.
+//
+// No lookup configured corroborates nothing, so a mapper built without one behaves
+// exactly as before. An error from the lookup is RETURNED, never folded into "no echo":
+// an unanswered question must not become a refused link, or an outage turns into a
+// durable "this show is not on TVDB".
+func (m *Mapper) seriesImdbEcho(ctx context.Context, series *tvdb.SeriesExtendedRecord, tmdbSeriesID int) (bool, error) {
+	if m.seriesImdbID == nil {
+		return false, nil
+	}
+	want, err := m.seriesImdbID(ctx, tmdbSeriesID)
+	if err != nil {
+		return false, err
+	}
+	return imdbEchoMatches(series, want), nil
+}
+
+// imdbEchoMatches reports whether a TVDB series record claims this IMDb id. Both
+// providers asserting the same IMDb id is a bidirectional identity, exactly like the
+// TMDB remote-id echo, and it is the only signal left when TVDB carries no TMDB remote
+// id and the titles differ (measured: Travelers tvdb 314544 / tmdb 67683 and Digimon
+// Adventure tvdb 72241 / tmdb 31654 -- tt5651844 and tt0210418 on both sides, both
+// refused before this).
+//
+// An empty id on either side corroborates nothing. IMDb ids are globally unique across
+// films and series, so unlike a bare number there is no namespace to collide in -- but
+// absence is still not agreement.
+func imdbEchoMatches(series *tvdb.SeriesExtendedRecord, tmdbImdbID string) bool {
+	want := strings.TrimSpace(tmdbImdbID)
+	if series == nil || want == "" {
+		return false
+	}
+	for _, r := range series.RemoteIDs {
+		if isImdbRemoteSource(r.SourceName) && strings.TrimSpace(r.ID) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// isImdbRemoteSource matches the spellings TVDB uses for IMDb in a remote id's source
+// name ("IMDb" observed live; the others are the variance the client already tolerates
+// for TMDB).
+func isImdbRemoteSource(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	n = strings.NewReplacer(" ", "", ".", "", "-", "", "_", "").Replace(n)
+	return n == "imdb" || n == "imdbcom" || n == "internetmoviedatabase"
+}
+
 // isTmdbRemoteSource matches the spellings TVDB uses for TMDB in a remote id's
 // source name ("TheMovieDB.com", "TMDB", ...).
 func isTmdbRemoteSource(name string) bool {

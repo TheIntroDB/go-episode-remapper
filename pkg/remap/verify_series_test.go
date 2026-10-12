@@ -10,7 +10,8 @@ import (
 
 // seriesLinkFixture is the evidence for one TMDB external_ids link: TMDB's name for
 // the series, and the TVDB record the id points at (canonical name, aliases, the
-// record's own remote ids, and its per-language translations).
+// record's own remote ids, and its per-language translations). tmdbImdbID, when set,
+// is what the mapper's SeriesImdbID lookup answers -- the third corroboration signal.
 type seriesLinkFixture struct {
 	tmdbName     string
 	tmdbID       int
@@ -19,6 +20,7 @@ type seriesLinkFixture struct {
 	aliases      []tvdb.Alias
 	remoteIDs    []tvdb.RemoteID
 	translations map[string]*tvdb.SeriesTranslationRecord
+	tmdbImdbID   string
 }
 
 func linkMapper(f seriesLinkFixture) *Mapper {
@@ -28,7 +30,7 @@ func linkMapper(f seriesLinkFixture) *Mapper {
 	if f.tvdbID == 0 {
 		f.tvdbID = 73871
 	}
-	return &Mapper{
+	m := &Mapper{
 		tvdb: &fakeTVDB{
 			seriesByID:         map[int]*tvdb.SeriesBaseRecord{f.tvdbID: {ID: f.tvdbID, Name: f.canonical}},
 			aliasesByID:        map[int][]tvdb.Alias{f.tvdbID: f.aliases},
@@ -44,6 +46,10 @@ func linkMapper(f seriesLinkFixture) *Mapper {
 		maxTVDBPages:        200,
 		maxTMDBSeasons:      300,
 	}
+	if f.tmdbImdbID != "" {
+		m.seriesImdbID = func(_ context.Context, _ int) (string, error) { return f.tmdbImdbID, nil }
+	}
+	return m
 }
 
 // Route 1 is TMDB's own external_ids field, which is user-contributed and can be
@@ -127,6 +133,51 @@ func TestResolveVerifiedSeriesCorroboratesTMDBExternalIDs(t *testing.T) {
 			name: "no TMDB name and no echo -> refused",
 			fixture: seriesLinkFixture{
 				tmdbName: "", canonical: "進撃の巨人",
+			},
+			wantNoErr: false,
+		},
+		{
+			// The measured real case: TVDB has NO TMDB remote id and the title differs,
+			// but both records name the same IMDb id. Travelers (tvdb 314544 / tmdb
+			// 67683) is "Travelers (2016)" vs "Travelers", both tt5651844.
+			name: "imdb id echoes on both records -> accepted",
+			fixture: seriesLinkFixture{
+				tmdbName: "Travelers", canonical: "Travelers (2016)",
+				remoteIDs: []tvdb.RemoteID{
+					{SourceName: "IMDb", ID: "tt5651844"},
+					{SourceName: "TMS (Zap2It)", ID: "EP02506429"},
+				},
+				tmdbImdbID: "tt5651844",
+			},
+			wantProv: "tmdb_external_ids:imdb_echo", wantNoErr: true,
+		},
+		{
+			// Digimon Adventure (tvdb 72241 / tmdb 31654): a Japanese title with no
+			// English alias, both records tt0210418.
+			name: "imdb echo, original-language title -> accepted",
+			fixture: seriesLinkFixture{
+				tmdbName: "Digimon: Digital Monsters", canonical: "デジモンアドベンチャー",
+				remoteIDs:  []tvdb.RemoteID{{SourceName: "IMDb", ID: "tt0210418"}},
+				tmdbImdbID: "tt0210418",
+			},
+			wantProv: "tmdb_external_ids:imdb_echo", wantNoErr: true,
+		},
+		{
+			name: "imdb ids differ -> still refused",
+			fixture: seriesLinkFixture{
+				tmdbName: "Travelers", canonical: "Travelers (2016)",
+				remoteIDs:  []tvdb.RemoteID{{SourceName: "IMDb", ID: "tt5651844"}},
+				tmdbImdbID: "tt9999999",
+			},
+			wantNoErr: false,
+		},
+		{
+			// No lookup configured: the signal is simply unavailable, which must not
+			// change any other answer.
+			name: "imdb would match but no lookup is configured -> refused",
+			fixture: seriesLinkFixture{
+				tmdbName: "Travelers", canonical: "Travelers (2016)",
+				remoteIDs: []tvdb.RemoteID{{SourceName: "IMDb", ID: "tt5651844"}},
 			},
 			wantNoErr: false,
 		},

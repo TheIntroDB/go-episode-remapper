@@ -26,6 +26,26 @@ type Options struct {
 	// Leave false unless a caller has independently established that the orders
 	// agree; results then carry MatchedBy "assumed_same_coordinates".
 	AllowCoordinateIdentityFallback bool
+
+	// SeriesImdbID, when set, supplies the IMDb id TMDB records for a series. It is
+	// the third corroboration signal for a TMDB external_ids link: both records
+	// naming the same IMDb id is a bidirectional identity, exactly like the TMDB
+	// remote-id echo, and it is the only signal left when TVDB carries NO TMDB
+	// remote id AND the titles differ. Measured live 2026-10-12: Travelers (tvdb
+	// 314544 / tmdb 67683) is "Travelers (2016)" on TVDB with remoteIds {IMDB
+	// tt5651844, TMS ...}, and Digimon Adventure (tvdb 72241 / tmdb 31654) is a
+	// Japanese title vs "Digimon: Digital Monsters"; both records carry tt5651844
+	// and tt0210418 respectively, and BOTH were refused before this signal.
+	//
+	// It is a function rather than a tmdbAPI method for two reasons: a caller that
+	// ALREADY resolves the IMDb id (to cache it) can supply it without the library
+	// making a second request, and the tmdbAPI interface its test fakes implement
+	// does not have to grow.
+	//
+	// An error is a question that could not be ASKED, not an answer of "no echo":
+	// the corroboration propagates it so a caller can keep an outage out of whatever
+	// negative cache it keeps.
+	SeriesImdbID func(ctx context.Context, tmdbSeriesID int) (string, error)
 }
 
 var defaultFallbackSeasonTypes = []string{"official", "dvd", "alternate", "regional"}
@@ -71,6 +91,9 @@ type Mapper struct {
 	// "Rebirth"). When on, results carry MatchedBy "assumed_same_coordinates" so
 	// a caller can never mistake the guess for a match.
 	allowCoordinateIdentityFallback bool
+	// seriesImdbID supplies the IMDb id TMDB records for a series, when the caller
+	// has a way to look it up. Nil disables the IMDb-echo signal.
+	seriesImdbID func(ctx context.Context, tmdbSeriesID int) (string, error)
 }
 
 func NewMapper(opts Options) *Mapper {
@@ -113,6 +136,7 @@ func NewMapper(opts Options) *Mapper {
 		maxTVDBPages:                    maxPages,
 		maxTMDBSeasons:                  maxSeasons,
 		allowCoordinateIdentityFallback: opts.AllowCoordinateIdentityFallback,
+		seriesImdbID:                    opts.SeriesImdbID,
 	}
 }
 
@@ -550,6 +574,17 @@ func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int
 		if series, err := m.tvdb.GetSeriesExtended(ctx, tvdbID); err == nil && series != nil {
 			if signal, ok := SeriesCorroboratesTmdb(ctx, m.tvdb, series, tmdbSeriesID, tmdbName); ok {
 				return &tvdb.SeriesBaseRecord{ID: series.ID, Name: series.Name}, "tmdb_external_ids:" + signal, nil
+			}
+			// 1b. The IMDb id, when the caller can supply one. This sits INSIDE route 1
+			// rather than after the search routes on purpose: the record already in
+			// hand is the one whose remote ids must assert the id, so re-fetching it
+			// below would be the same request a second time.
+			echo, echoErr := m.seriesImdbEcho(ctx, series, tmdbSeriesID)
+			if echoErr != nil {
+				return nil, "", echoErr
+			}
+			if echo {
+				return &tvdb.SeriesBaseRecord{ID: series.ID, Name: series.Name}, "tmdb_external_ids:imdb_echo", nil
 			}
 		}
 	}
