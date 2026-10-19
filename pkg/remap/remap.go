@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -26,6 +27,20 @@ type Options struct {
 	// Leave false unless a caller has independently established that the orders
 	// agree; results then carry MatchedBy "assumed_same_coordinates".
 	AllowCoordinateIdentityFallback bool
+
+	// VerifiedSeriesCacheTTL is how long a Mapper remembers "this TMDB series is
+	// verified against that TVDB series".
+	//
+	// The verification is the most repeated work in the package: TmdbToTvdbInOrder
+	// resolves and corroborates the series on EVERY call, which is 2-4 upstream
+	// requests (TMDB details + external_ids, TVDB extended record, sometimes TVDB
+	// translations or search) before it even looks at the episode. A caller that
+	// walks a series episode by episode -- a library scan -- paid that per episode,
+	// for an answer that cannot change within the scan.
+	//
+	// Zero disables the memo; a negative value never expires it. Only SUCCESSFUL
+	// verifications are remembered, so an outage is never frozen into a memo.
+	VerifiedSeriesCacheTTL time.Duration
 
 	// SeriesImdbID, when set, supplies the IMDb id TMDB records for a series. It is
 	// the third corroboration signal for a TMDB external_ids link: both records
@@ -94,6 +109,28 @@ type Mapper struct {
 	// seriesImdbID supplies the IMDb id TMDB records for a series, when the caller
 	// has a way to look it up. Nil disables the IMDb-echo signal.
 	seriesImdbID func(ctx context.Context, tmdbSeriesID int) (string, error)
+
+	// verifiedSeries memoises resolveVerifiedTVDBSeries per TMDB series id. It makes
+	// the Mapper stateful, so it is mutex-guarded; a nil map means the memo is off,
+	// which is what an Options with no VerifiedSeriesCacheTTL produces.
+	verifiedSeriesMu  sync.Mutex
+	verifiedSeries    map[int]verifiedSeriesEntry
+	verifiedSeriesTTL time.Duration
+}
+
+// maxVerifiedSeriesEntries bounds the verified-series memo. Each entry is a series
+// id, a name and an expiry (~100 bytes), so this is a few hundred KB at worst --
+// the map is cleared wholesale when it is reached, which is coarse but keeps the
+// bound honest without an LRU's bookkeeping.
+const maxVerifiedSeriesEntries = 2048
+
+// verifiedSeriesEntry is a memoised resolveVerifiedTVDBSeries answer. Only
+// SUCCESSFUL verifications are stored: a failure (a timeout, a rate limit, an
+// unresolvable link) is evidence about the moment, not about the series.
+type verifiedSeriesEntry struct {
+	record  tvdb.SeriesBaseRecord
+	lookup  string
+	expires time.Time
 }
 
 func NewMapper(opts Options) *Mapper {
@@ -128,7 +165,7 @@ func NewMapper(opts Options) *Mapper {
 		tmdbClient = tmdb.NewClient(opts.TMDBBearerToken)
 	}
 
-	return &Mapper{
+	m := &Mapper{
 		tvdb:                            tvdb.NewClient(opts.TVDBAPIKey, opts.TVDBPIN),
 		tmdb:                            tmdbClient,
 		tvdbSeasonType:                  seasonType,
@@ -137,7 +174,12 @@ func NewMapper(opts Options) *Mapper {
 		maxTMDBSeasons:                  maxSeasons,
 		allowCoordinateIdentityFallback: opts.AllowCoordinateIdentityFallback,
 		seriesImdbID:                    opts.SeriesImdbID,
+		verifiedSeriesTTL:               opts.VerifiedSeriesCacheTTL,
 	}
+	if opts.VerifiedSeriesCacheTTL != 0 {
+		m.verifiedSeries = make(map[int]verifiedSeriesEntry)
+	}
+	return m
 }
 
 type TmdbToTvdbResult struct {
@@ -549,7 +591,62 @@ func (m *Mapper) fetchOrderEpisodes(ctx context.Context, seriesID int, order str
 // TMDB is asked first: its external_ids mapping was correct in 5 of 5 measured
 // cases, including the case TVDB's own search gets wrong. It is still checked,
 // because that field is user-contributed and can itself go stale.
+// resolveVerifiedTVDBSeries returns the verified TVDB series for a TMDB series,
+// memoised per TMDB id when the mapper was given a VerifiedSeriesCacheTTL.
+//
+// The memo exists because this is the one lookup every episode of a series repeats:
+// TmdbToTvdbInOrder verifies the series before it looks at the episode, so a scan of
+// a 12-episode season paid 24-48 upstream requests to answer "which TVDB series is
+// this" twelve times. The answer is a property of the series, not of the episode.
+//
+// Only successes are stored. A failure here is a timeout or an unverified link --
+// evidence about the moment, which a memo must not turn into a durable claim (the
+// whole point of resolveVerifiedTVDBSeries's refusals is that a wrong link relabels a
+// series).
 func (m *Mapper) resolveVerifiedTVDBSeries(ctx context.Context, tmdbSeriesID int) (*tvdb.SeriesBaseRecord, string, error) {
+	if m.verifiedSeries == nil {
+		return m.resolveVerifiedTVDBSeriesUncached(ctx, tmdbSeriesID)
+	}
+
+	m.verifiedSeriesMu.Lock()
+	entry, hit := m.verifiedSeries[tmdbSeriesID]
+	m.verifiedSeriesMu.Unlock()
+	if hit && (entry.expires.IsZero() || time.Now().Before(entry.expires)) {
+		record := entry.record
+		return &record, entry.lookup, nil
+	}
+
+	// Resolved OUTSIDE the lock. Holding it across 2-4 upstream requests would
+	// serialise every concurrent series of a scan behind one, which is worse than the
+	// duplicate work a race produces -- and the duplicate answer is identical.
+	series, lookup, err := m.resolveVerifiedTVDBSeriesUncached(ctx, tmdbSeriesID)
+	if err != nil || series == nil {
+		return series, lookup, err
+	}
+
+	var expires time.Time
+	switch {
+	case m.verifiedSeriesTTL > 0:
+		expires = time.Now().Add(m.verifiedSeriesTTL)
+	case m.verifiedSeriesTTL < 0:
+		expires = time.Time{} // zero means "never": never expire
+	}
+
+	m.verifiedSeriesMu.Lock()
+	if len(m.verifiedSeries) >= maxVerifiedSeriesEntries {
+		// Coarse eviction: a scan reads a series' entries together, so an LRU would
+		// buy little over dropping the whole map at the bound.
+		m.verifiedSeries = make(map[int]verifiedSeriesEntry, maxVerifiedSeriesEntries)
+	}
+	m.verifiedSeries[tmdbSeriesID] = verifiedSeriesEntry{record: *series, lookup: lookup, expires: expires}
+	m.verifiedSeriesMu.Unlock()
+
+	return series, lookup, nil
+}
+
+// resolveVerifiedTVDBSeriesUncached is the verification itself, always reaching the
+// providers. See resolveVerifiedTVDBSeries for the memoised entry point.
+func (m *Mapper) resolveVerifiedTVDBSeriesUncached(ctx context.Context, tmdbSeriesID int) (*tvdb.SeriesBaseRecord, string, error) {
 	tmdbName := ""
 	if details, err := m.tmdb.GetTVDetails(ctx, tmdbSeriesID); err == nil && details != nil {
 		tmdbName = details.Name
