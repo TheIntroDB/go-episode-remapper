@@ -1,4 +1,17 @@
-# go-episode-remapper
+<img align="right" width="88" src="https://raw.githubusercontent.com/TheIntroDB/theintrodb-assets/main/badge.png" alt="TheIntroDB">
+
+[![Go 1.22%2B](https://img.shields.io/badge/Go-1.22%2B-00ADD8?style=flat-square&logo=go&logoColor=4ade80&labelColor=0d0d0d)](https://go.dev)
+[![License](https://img.shields.io/github/license/TheIntroDB/go-episode-remapper?style=flat-square&logo=gnu&logoColor=4ade80&label=License&labelColor=0d0d0d&color=038939)](https://github.com/TheIntroDB/go-episode-remapper/blob/main/LICENSE)
+
+[![Stars](https://img.shields.io/github/stars/TheIntroDB/go-episode-remapper?style=flat-square&logo=github&logoColor=4ade80&label=Stars&labelColor=0d0d0d&color=038939)](https://github.com/TheIntroDB/go-episode-remapper/stargazers)
+[![Issues](https://img.shields.io/github/issues/TheIntroDB/go-episode-remapper?style=flat-square&logo=github&logoColor=4ade80&label=Issues&labelColor=0d0d0d&color=038939)](https://github.com/TheIntroDB/go-episode-remapper/issues)
+[![Last commit](https://img.shields.io/github/last-commit/TheIntroDB/go-episode-remapper?style=flat-square&logo=git&logoColor=4ade80&label=Last%20commit&labelColor=0d0d0d&color=038939)](https://github.com/TheIntroDB/go-episode-remapper/commits)
+[![Discord](https://img.shields.io/discord/1457550295742812307?style=flat-square&logo=discord&logoColor=4ade80&label=Discord&labelColor=0d0d0d&color=038939)](https://discord.com/channels/1457550295742812307/1457550298255200380)
+
+### TheIntroDB – Go Episode Remapper
+
+---
+
 A go module to help remap between TVDB, TMDB, and IMDb episode order
 
 ## CLI
@@ -81,3 +94,12 @@ spellings include the Jellyfin `Series.DisplayOrder` aliases `altdvd` and
   behaviour is unchanged. An unset `FallbackSeasonTypes` now takes the module's
   documented default (`official, dvd, alternate, regional`) instead of silently
   searching the primary season type only.
+
+---
+
+<p align="center">
+  <a href="https://theintrodb.org"><img src="https://raw.githubusercontent.com/TheIntroDB/theintrodb-assets/main/badge.png" alt="TheIntroDB" width="44" height="44"></a>
+  <br><br>
+  <sub><b>TheIntroDB</b> · community-submitted intro, recap, credits and preview timestamps for your media server<br>
+  <a href="https://theintrodb.org">theintrodb.org</a> · <a href="https://github.com/TheIntroDB">GitHub</a> · <a href="https://discord.com/channels/1457550295742812307/1457550298255200380">Discord</a></sub>
+</p>
